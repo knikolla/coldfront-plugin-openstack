@@ -1,5 +1,9 @@
+import datetime
+import math
+import pytz
 import re
 import secrets
+
 from coldfront.core.allocation.models import (AllocationAttribute,
                                               AllocationAttributeType)
 
@@ -43,3 +47,47 @@ def get_sanitized_project_name(project_name):
     # remove repeated and trailing dashes
     project_name = re.sub('-+', '-', project_name).strip('-')
     return project_name
+
+
+def calculate_quota_unit_hours(allocation, attribute, start, end):
+    """Returns unit*hours of quota allocated in a given period.
+
+    Calculation is rounded up by the hour and tracks the history of change
+    requests.
+
+    :param attribute: Name of the attribute to calculate.
+    :param start: Start time to being calculation.
+    :param end: Optional. End time for calculation.
+    :return: Value of attribute * amount of hours.
+    """
+    allocation_attribute = AllocationAttribute.objects.filter(
+        allocation_attribute_type__name=attribute,
+        allocation = allocation
+    ).first()
+    if allocation_attribute is None:
+        return 0
+    value_history = list(allocation_attribute.history.all())
+    value_history.reverse()
+
+    value_times_seconds = 0
+    last_event_time = start
+    last_event_value = 0
+    for event in value_history:
+        event_time = event.modified
+
+        if event_time < start:
+            event_time = start
+
+        if end and event_time > end:
+           event_time = end
+
+        seconds_since_last_event = math.ceil((event_time - last_event_time).total_seconds())
+        value_times_seconds += seconds_since_last_event * last_event_value
+
+        last_event_time = event_time
+        last_event_value = int(event.value)
+
+    since_last_event = math.ceil((end - last_event_time).total_seconds())
+    value_times_seconds += since_last_event * last_event_value
+
+    return math.ceil(value_times_seconds / 3600)
