@@ -122,7 +122,7 @@ def calculate_quota_unit_hours(allocation: Allocation,
                       f" {cr.history.first().created}, change at {event_time}")
                 # The moment of creation for the change request, must fall
                 # between the last event and inclusive of the next event.
-                if last_event_time < cr.history.first().created <= event_time:
+                if last_event_time <= cr.history.first().created <= event_time:
                     if attr_cr := AllocationAttributeChangeRequest.objects.filter(
                         allocation_change_request=cr,
                         allocation_attribute=allocation_attribute,
