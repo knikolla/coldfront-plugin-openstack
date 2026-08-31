@@ -2,7 +2,19 @@
 set -x
 
 sudo snap install microstack --edge --devmode
-sudo microstack init --auto --control
+for attempt in 1 2 3; do
+    if sudo microstack init --auto --control; then
+        break
+    fi
+
+    if [[ "$attempt" == "3" ]]; then
+        echo "microstack init failed after ${attempt} attempts"
+        exit 1
+    fi
+
+    echo "microstack init failed, retrying (attempt ${attempt}/3)"
+    sleep 15
+done
 microstack.openstack domain create sso
 microstack.openstack identity provider create sso --domain sso
 microstack.openstack mapping create sso_mapping --rules ci/mapping.json
