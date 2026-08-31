@@ -5,7 +5,7 @@
 # Tests expect the resource to be name Devstack
 set -xe
 
-export OPENSHIFT_MICROSHIFT_TOKEN="$(oc create token -n onboarding onboarding-serviceaccount)"
+export OPENSHIFT_MICROSHIFT_TOKEN="$(oc whoami -t)"
 export OPENSHIFT_MICROSHIFT_VERIFY="false"
 
 if [[ ! "${CI}" == "true" ]]; then
