@@ -357,50 +357,44 @@ class OpenShiftResourceAllocator(base.ResourceAllocator):
         logger.info(f"User {unique_id} successfully created")
 
     def assign_role_on_user(self, username, project_id):
-        """Assign a role to a user in a project using direct OpenShift API calls"""
+        """Assign a role to a user in a project via the project users group."""
+        group_name = self._project_users_group_name(project_id)
+
         try:
-            # Try to get existing rolebindings with same name
-            # as the role name in project's namespace
+            group = self._openshift_get_group(group_name)
+            if username not in group.get("users", []):
+                group["users"].append(username)
+                self._openshift_update_group(group_name, group)
+        except kexc.NotFoundError:
+            self._openshift_create_group(group_name, users=[username])
+
+        try:
             rolebinding = self._openshift_get_rolebindings(
                 project_id, self.member_role_name
             )
-
-            if not self._user_in_rolebinding(username, rolebinding):
-                # Add user to existing rolebinding
+            if not self._subject_in_rolebinding("Group", group_name, rolebinding):
                 if "subjects" not in rolebinding:
                     rolebinding["subjects"] = []
-                rolebinding["subjects"].append({"kind": "User", "name": username})
+                rolebinding["subjects"].append({"kind": "Group", "name": group_name})
                 self._openshift_update_rolebindings(project_id, rolebinding)
-
         except kexc.NotFoundError:
-            # Create new rolebinding if it doesn't exist
             self._openshift_create_rolebindings(
-                project_id, username, self.member_role_name
+                project_id, group_name, self.member_role_name, subject_kind="Group"
             )
         except kexc.ConflictError:
-            # Role already exists, ignore
             pass
 
     def remove_role_from_user(self, username, project_id):
-        """Remove a role from a user in a project using direct OpenShift API calls"""
+        """Remove a user from the project users group."""
+        group_name = self._project_users_group_name(project_id)
+
         try:
-            rolebinding = self._openshift_get_rolebindings(
-                project_id, self.member_role_name
-            )
-
-            if "subjects" in rolebinding:
-                rolebinding["subjects"] = [
-                    subject
-                    for subject in rolebinding["subjects"]
-                    if not (
-                        subject.get("kind") == "User"
-                        and subject.get("name") == username
-                    )
-                ]
-                self._openshift_update_rolebindings(project_id, rolebinding)
-
+            group = self._openshift_get_group(group_name)
+            group["users"] = [
+                member for member in group.get("users", []) if member != username
+            ]
+            self._openshift_update_group(group_name, group)
         except kexc.NotFoundError:
-            # Rolebinding doesn't exist, nothing to remove
             pass
 
     def _create_project(self, project_name, project_id):
@@ -423,14 +417,30 @@ class OpenShiftResourceAllocator(base.ResourceAllocator):
 
         self._openshift_create_project(project_def)
         self._openshift_create_limits(project_name)
+        group_name = self._project_users_group_name(project_id)
+        self._openshift_create_group(group_name)
+        self._openshift_create_rolebindings(
+            project_name, group_name, self.member_role_name, subject_kind="Group"
+        )
 
         logger.info(f"Project {project_id} and limit range successfully created")
 
     def _get_role(self, username, project_id):
+        group_name = self._project_users_group_name(project_id)
         rolebindings = self._openshift_get_rolebindings(
             project_id, self.member_role_name
         )
-        if not self._user_in_rolebinding(username, rolebindings):
+        if not self._subject_in_rolebinding("Group", group_name, rolebindings):
+            raise NotFound(
+                f"Group {group_name} has no rolebindings in project {project_id}"
+            )
+
+        try:
+            group = self._openshift_get_group(group_name)
+        except kexc.NotFoundError:
+            raise NotFound(f"Group {group_name} not found")
+
+        if username not in group.get("users", []):
             raise NotFound(
                 f"User {username} has no rolebindings in project {project_id}"
             )
@@ -444,23 +454,13 @@ class OpenShiftResourceAllocator(base.ResourceAllocator):
         logger.info(f"User {username} successfully deleted")
 
     def get_users(self, project_id):
-        """Get all users with roles in a project"""
-        users = set()
-
-        # Check all standard OpenShift roles
-        for role in OPENSHIFT_ROLES:
-            try:
-                rolebinding = self._openshift_get_rolebindings(project_id, role)
-                if "subjects" in rolebinding:
-                    users.update(
-                        subject["name"]
-                        for subject in rolebinding["subjects"]
-                        if subject.get("kind") == "User"
-                    )
-            except kexc.NotFoundError:
-                continue
-
-        return users
+        """Get all users from the project users group."""
+        group_name = self._project_users_group_name(project_id)
+        try:
+            group = self._openshift_get_group(group_name)
+            return set(group.get("users", []))
+        except kexc.NotFoundError:
+            return set()
 
     def _openshift_get_user(self, username):
         api = self.get_resource_api(API_USER, "User")
@@ -493,6 +493,30 @@ class OpenShiftResourceAllocator(base.ResourceAllocator):
     def _openshift_delete_identity(self, username):
         api = self.get_resource_api(API_USER, "Identity")
         return api.delete(name=self.qualified_id_user(username)).to_dict()
+
+    def _openshift_get_group(self, group_name):
+        api = self.get_resource_api(API_USER, "Group")
+        result = clean_openshift_metadata(api.get(name=group_name).to_dict())
+
+        if "users" not in result:
+            result["users"] = []
+
+        return result
+
+    def _openshift_create_group(self, group_name, users=None):
+        api = self.get_resource_api(API_USER, "Group")
+        payload = {
+            "metadata": {"name": group_name},
+            "users": users or [],
+        }
+        try:
+            return clean_openshift_metadata(api.create(body=payload).to_dict())
+        except kexc.ConflictError:
+            return self._openshift_get_group(group_name)
+
+    def _openshift_update_group(self, group_name, group):
+        api = self.get_resource_api(API_USER, "Group")
+        return clean_openshift_metadata(api.patch(name=group_name, body=group).to_dict())
 
     def _openshift_create_useridentitymapping(self, identity_mapping_def):
         api = self.get_resource_api(API_USER, "UserIdentityMapping")
@@ -634,13 +658,15 @@ class OpenShiftResourceAllocator(base.ResourceAllocator):
         api = self.get_resource_api(API_CORE, "ResourceQuota")
         return api.delete(namespace=project_id, name=resourcequota_name).to_dict()
 
-    def _user_in_rolebinding(self, username, rolebinding):
-        """Check if a user is in a rolebinding"""
+    def _project_users_group_name(self, namespace_name):
+        return f"{namespace_name}-users"
+
+    def _subject_in_rolebinding(self, kind, name, rolebinding):
         if "subjects" not in rolebinding:
             return False
 
         return any(
-            subject.get("kind") == "User" and subject.get("name") == username
+            subject.get("kind") == kind and subject.get("name") == name
             for subject in rolebinding["subjects"]
         )
 
@@ -656,11 +682,13 @@ class OpenShiftResourceAllocator(base.ResourceAllocator):
 
         return result
 
-    def _openshift_create_rolebindings(self, project_name, username, role):
+    def _openshift_create_rolebindings(
+        self, project_name, subject_name, role, subject_kind="User"
+    ):
         api = self.get_resource_api(API_RBAC, "RoleBinding")
         payload = {
             "metadata": {"name": role, "namespace": project_name},
-            "subjects": [{"name": username, "kind": "User"}],
+            "subjects": [{"name": subject_name, "kind": subject_kind}],
             "roleRef": {"name": role, "kind": "ClusterRole"},
         }
         return clean_openshift_metadata(

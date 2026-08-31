@@ -38,6 +38,21 @@ class TestAllocation(base.TestBase):
         )
 
         allocator._get_project(project_id)
+        users_group_name = f"{project_id}-users"
+        users_group = allocator._openshift_get_group(users_group_name)
+        self.assertEqual(users_group["metadata"]["name"], users_group_name)
+
+        rolebinding = allocator._openshift_get_rolebindings(
+            project_id, allocator.member_role_name
+        )
+        self.assertIn(
+            {"kind": "Group", "name": users_group_name},
+            rolebinding.get("subjects", []),
+        )
+        self.assertNotIn(
+            {"kind": "User", "name": user.username},
+            rolebinding.get("subjects", []),
+        )
 
         # Check default limit ranges
         limit_ranges = allocator._openshift_get_limits(project_id)

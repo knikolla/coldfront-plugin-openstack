@@ -18,9 +18,16 @@ class TestOpenshiftQuota(base.TestUnitOpenshiftBase):
         "coldfront_plugin_cloud.openshift.OpenShiftResourceAllocator._openshift_create_limits",
         mock.Mock(),
     )
-    def test_create_project(self):
+    @mock.patch(
+        "coldfront_plugin_cloud.openshift.OpenShiftResourceAllocator._openshift_create_group"
+    )
+    @mock.patch(
+        "coldfront_plugin_cloud.openshift.OpenShiftResourceAllocator._openshift_create_rolebindings"
+    )
+    def test_create_project(self, fake_create_rolebinding, fake_create_group):
         self.allocator.allocation.project.pi.username = "fake-user"
         self.allocator.allocation.project_id = "Fake Project ID"
+        self.allocator.member_role_name = "admin"
         self.allocator._create_project("fake-project-name", "Fake Project ID")
         self.allocator.k8_client.resources.get.return_value.create.assert_called_with(
             body={
@@ -35,6 +42,10 @@ class TestOpenshiftQuota(base.TestUnitOpenshiftBase):
                     "labels": PROJECT_DEFAULT_LABELS,
                 }
             }
+        )
+        fake_create_group.assert_called_with("Fake Project ID-users")
+        fake_create_rolebinding.assert_called_with(
+            "fake-project-name", "Fake Project ID-users", "admin", subject_kind="Group"
         )
 
     def test_delete_project(self):
