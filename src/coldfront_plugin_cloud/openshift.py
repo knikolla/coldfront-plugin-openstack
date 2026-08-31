@@ -363,7 +363,6 @@ class OpenShiftResourceAllocator(base.ResourceAllocator):
         try:
             group = self._openshift_get_group(group_name)
             if username not in group.get("users", []):
-                group["users"] = group.get("users", [])
                 group["users"].append(username)
                 self._openshift_update_group(group_name, group)
         except kexc.NotFoundError:
@@ -513,7 +512,7 @@ class OpenShiftResourceAllocator(base.ResourceAllocator):
         try:
             return clean_openshift_metadata(api.create(body=payload).to_dict())
         except kexc.ConflictError:
-            pass
+            return self._openshift_get_group(group_name)
 
     def _openshift_update_group(self, group_name, group):
         api = self.get_resource_api(API_USER, "Group")
@@ -659,8 +658,8 @@ class OpenShiftResourceAllocator(base.ResourceAllocator):
         api = self.get_resource_api(API_CORE, "ResourceQuota")
         return api.delete(namespace=project_id, name=resourcequota_name).to_dict()
 
-    def _project_users_group_name(self, project_id):
-        return f"{project_id}-users"
+    def _project_users_group_name(self, namespace_name):
+        return f"{namespace_name}-users"
 
     def _subject_in_rolebinding(self, kind, name, rolebinding):
         if "subjects" not in rolebinding:
@@ -670,10 +669,6 @@ class OpenShiftResourceAllocator(base.ResourceAllocator):
             subject.get("kind") == kind and subject.get("name") == name
             for subject in rolebinding["subjects"]
         )
-
-    def _user_in_rolebinding(self, username, rolebinding):
-        """Check if a user is in a rolebinding."""
-        return self._subject_in_rolebinding("User", username, rolebinding)
 
     def _openshift_get_rolebindings(self, project_name, role):
         api = self.get_resource_api(API_RBAC, "RoleBinding")

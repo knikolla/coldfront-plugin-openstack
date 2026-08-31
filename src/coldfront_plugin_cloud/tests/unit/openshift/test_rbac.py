@@ -16,7 +16,7 @@ class TestMocOpenShiftRBAC(base.TestBase):
         self.allocator.k8_client = mock.Mock()
         self.allocator.member_role_name = "admin"
 
-    def test_user_in_rolebindings_false(self):
+    def test_subject_in_rolebindings_false(self):
         fake_rb = {
             "subjects": [
                 {
@@ -25,10 +25,10 @@ class TestMocOpenShiftRBAC(base.TestBase):
                 }
             ]
         }
-        output = self.allocator._user_in_rolebinding("fake-user", fake_rb)
+        output = self.allocator._subject_in_rolebinding("User", "fake-user", fake_rb)
         self.assertFalse(output)
 
-    def test_user_in_rolebindings_true(self):
+    def test_subject_in_rolebindings_true(self):
         fake_rb = {
             "subjects": [
                 {
@@ -37,7 +37,7 @@ class TestMocOpenShiftRBAC(base.TestBase):
                 }
             ]
         }
-        output = self.allocator._user_in_rolebinding("fake-user", fake_rb)
+        output = self.allocator._subject_in_rolebinding("User", "fake-user", fake_rb)
         self.assertTrue(output)
 
     @mock.patch(
@@ -108,8 +108,11 @@ class TestMocOpenShiftRBAC(base.TestBase):
     @mock.patch(
         "coldfront_plugin_cloud.openshift.OpenShiftResourceAllocator._openshift_get_rolebindings"
     )
+    @mock.patch(
+        "coldfront_plugin_cloud.openshift.OpenShiftResourceAllocator._openshift_update_rolebindings"
+    )
     def test_add_user_to_role_group_not_exists(
-        self, fake_get_rb, fake_create_group, fake_get_group
+        self, fake_update_rb, fake_get_rb, fake_create_group, fake_get_group
     ):
         fake_error = kexc.NotFoundError(mock.Mock())
         fake_get_group.side_effect = fake_error
@@ -118,6 +121,7 @@ class TestMocOpenShiftRBAC(base.TestBase):
         }
         self.allocator.assign_role_on_user("fake-user", "fake-project")
         fake_create_group.assert_called_with("fake-project-users", users=["fake-user"])
+        fake_update_rb.assert_not_called()
 
     @mock.patch(
         "coldfront_plugin_cloud.openshift.OpenShiftResourceAllocator._openshift_get_group"
@@ -163,7 +167,7 @@ class TestMocOpenShiftRBAC(base.TestBase):
     )
     def test_remove_user_from_role_not_exists(self, fake_update_group, fake_get_group):
         fake_get_group.side_effect = kexc.NotFoundError(mock.Mock())
-        self.allocator.remove_role_from_user("fake-project", "fake-user")
+        self.allocator.remove_role_from_user("fake-user", "fake-project")
         fake_update_group.assert_not_called()
 
     @mock.patch(
@@ -192,6 +196,8 @@ class TestMocOpenShiftRBAC(base.TestBase):
         }
         fake_get_group.return_value = {"users": ["fake-user"]}
         self.allocator._get_role("fake-user", "fake-project")
+        fake_get_rolebindings.assert_called_with("fake-project", "admin")
+        fake_get_group.assert_called_with("fake-project-users")
 
     @mock.patch(
         "coldfront_plugin_cloud.openshift.OpenShiftResourceAllocator._openshift_get_group"
